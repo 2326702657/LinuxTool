@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#本项目为开源项目；开发支持：搜码(souma.net) ；速拓云(sutuoc.com)；使用GPL-3.0开源许可协议
+#本项目为开源项目；开发支持：搜码(souma.net) 速拓云(sutuoc.com)；使用GPL-3.0开源许可协议
 
 # 强制以root权限运行
 if [ "$(id -u)" != "0" ]; then
