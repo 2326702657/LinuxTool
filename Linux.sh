@@ -78,76 +78,110 @@ show_software_menu() {
 
 # 挂载数据盘
 mount_data_disk() {
-    read -p "请输入数据盘设备名 [默认：/dev/vdb1]: " disk_device
+    read -p "$(echo -e "${YELLOW}请输入数据盘设备名 [默认：/dev/vdb1]: ${NC}")" disk_device
     disk_device=${disk_device:-"/dev/vdb1"}
 
-    read -p "请输入挂载点目录 [推荐：/data]: " mount_point
+    read -p "$(echo -e "${YELLOW}请输入挂载点目录 [默认：/data]: ${NC}")" mount_point
     mount_point=${mount_point:-"/data"}
 
     # 检查挂载点目录是否存在，不存在则创建
     if [ ! -d "$mount_point" ]; then
+        echo -e "${YELLOW}创建挂载目录: ${BLUE}$mount_point${NC}"
         sudo mkdir -p "$mount_point"
     fi
 
     # 检查数据盘是否已经被挂载
     if grep -qs "$disk_device " /proc/mounts; then
-        echo "数据盘 $disk_device 已经被挂载"
+        echo -e "${RED}错误：数据盘 ${BLUE}$disk_device${RED} 已经被挂载${NC}"
         return
     fi
 
     # 检查数据盘是否存在并且为块设备
     if [ ! -b "$disk_device" ]; then
-        echo "数据盘 $disk_device 不存在或者不是块设备"
+        echo -e "${RED}错误：设备 ${BLUE}$disk_device${RED} 不存在或不是块设备${NC}"
         return
     fi
-
-    # 格式化数据盘（这里假设为ext4，用户可以根据需要修改）
-    # 注意：格式化会删除数据盘上的所有数据，请谨慎操作
-    # read -p "数据盘 $disk_device 尚未格式化，是否格式化？(y/n): " format_choice
-    # if [[ $format_choice == "y" || $format_choice == "Y" ]]; then
-    #     sudo mkfs.ext4 "$disk_device"
-    # else
-    #     echo "取消格式化，退出挂载。"
-    #     return
-    # fi
 
     # 挂载数据盘
+    echo -e "${GREEN}正在挂载设备 ${BLUE}$disk_device${GREEN} 到 ${BLUE}$mount_point${NC}"
     sudo mount "$disk_device" "$mount_point"
-    echo "数据盘 $disk_device 成功挂载到 $mount_point"
 
-    # 将数据盘添加到 /etc/fstab 实现开机自动挂载
-    # 注意：这里假设文件系统类型为ext4，用户需要根据实际情况修改
+    # 更新 fstab
+    echo -e "${YELLOW}正在配置开机自动挂载...${NC}"
     echo "$disk_device $mount_point ext4 defaults 0 2" | sudo tee -a /etc/fstab
-    echo "数据盘已成功挂载到 $mount_point，并已设置为开机自动挂载。"
-}
 
+    # 结果提示
+    echo -e "${GREEN}挂载成功！详细信息："
+    echo -e "设备路径: ${BLUE}$disk_device${NC}"
+    echo -e "挂载点: ${BLUE}$mount_point${NC}"
+    df -h | grep "$mount_point"
+}
 # 卸载数据盘
 unmount_data_disk() {
-    read -p "请输入数据盘设备名 [默认：/dev/vdb1]: " disk_device
-    disk_device=${disk_device:-"/dev/vdb1"}
-
-    read -p "请输入挂载点目录 [默认：/data]: " mount_point
-    mount_point=${mount_point:-"/data"}
-
-    # 检查挂载点目录是否存在
-    if [ ! -d "$mount_point" ]; then
-        echo "挂载点目录 $mount_point 不存在"
-        return
+    # 使用lsblk检测已挂载的非系统磁盘
+    mounted_disks=$(lsblk -lp -o NAME,MOUNTPOINT | awk '$2!="" && $2!="/" && $2!="/boot" {print $1 "->" $2}')
+    
+    if [ -z "$mounted_disks" ]; then
+        echo -e "\033[31m未找到可卸载的数据盘\033[0m"
+        return 1
     fi
 
-    # 检查数据盘是否已经被挂载
-    if ! grep -qs "$disk_device" /proc/mounts; then
-        echo "数据盘 $disk_device 没有被挂载"
-        return
+    # 交互式选择要卸载的磁盘
+    echo -e "\033[36m已挂载的数据盘列表：\033[0m"
+    PS3="请选择要卸载的磁盘编号："
+    select mount_info in $mounted_disks; do
+        [ -n "$mount_info" ] && break
+    done
+
+    # 解析设备路径和挂载点
+    disk_device=$(echo $mount_info | awk -F'->' '{print $1}')
+    mount_point=$(echo $mount_info | awk -F'->' '{print $2}')
+
+    # 获取UUID用于清理fstab
+    disk_uuid=$(blkid -s UUID -o value $disk_device)
+
+    # 卸载流程
+    echo -e "\n\033[33m正在卸载 $disk_device ...\033[0m"
+    
+    # 检查文件系统是否繁忙
+    if lsof +D $mount_point &> /dev/null; then
+        echo -e "\033[31m错误：挂载点 $mount_point 正在被使用\033[0m"
+        echo -e "占用进程："
+        lsof +D $mount_point | awk 'NR==1 || $NF~/\<'${mount_point}'/ {print}'
+        read -p "是否强制卸载？(y/N): " force_choice
+        [[ $force_choice != "y" ]] && return 1
     fi
 
-    # 卸载数据盘
-    sudo umount "$mount_point"
-    echo "数据盘 $disk_device 成功从 $mount_point 卸载"
+    # 执行卸载
+    if ! umount $disk_device; then
+        echo -e "\033[31m卸载失败！可能原因：\033[0m"
+        echo -e "1. 设备未正确挂载"
+        echo -e "2. 内核缓存未更新"
+        echo -e "3. 硬件连接异常"
+        return 2
+    fi
 
-    # 从 /etc/fstab 中移除自动挂载条目
-    sudo sed -i "/$disk_device/d" /etc/fstab
-    echo "数据盘 $disk_device 已从 /etc/fstab 中移除，不会开机自动挂载。"
+    # 清理fstab（同时处理设备路径和UUID两种写法）
+    cp /etc/fstab /etc/fstab.bak  # 备份重要文件
+    sed -i "\|^$disk_device|d;\|^UUID=$disk_uuid|d" /etc/fstab
+
+    # 二次验证
+    if grep -q $mount_point /proc/mounts; then
+        echo -e "\033[31m警告：卸载成功但系统仍显示挂载，尝试强制刷新...\033[0m"
+        systemctl daemon-reload
+        sleep 2
+    fi
+
+    # 结果提示
+    echo -e "\033[32m成功卸载 $disk_device\033[0m"
+    echo -e "操作摘要："
+    echo -e "设备路径：\033[33m$disk_device\033[0m"
+    echo -e "挂载点：\033[33m$mount_point\033[0m"
+    echo -e "UUID：\033[33m$disk_uuid\033[0m"
+    
+    # 清理挂载点目录
+    read -p "是否删除挂载点目录？(y/N): " del_dir
+    [[ $del_dir == "y" ]] && rm -rf $mount_point
 }
 
 # 系统管理功能
