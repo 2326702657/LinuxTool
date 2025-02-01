@@ -1,10 +1,10 @@
 #!/bin/bash
 
-#本项目为开源项目；开发支持：搜码(souma.net) 速拓云(sutuoc.com)；使用GPL-3.0开源许可协议
+# 本项目为开源项目；开发支持：搜码(souma.net) 速拓云(sutuoc.com)；使用GPL-3.0开源许可协议
 
 # 强制以root权限运行
 if [ "$(id -u)" != "0" ]; then
-    exec sudo "$0" "$@"
+    exec sudo "\$0" "$@"
     exit $?
 fi
 
@@ -16,25 +16,39 @@ BLUE='\033[0;34m'
 NC='\033[0m' # 恢复默认颜色
 
 # 全局变量
-server_ip=$(hostname -I | awk '{print $1}')
-uptime_cn=$(uptime -p | sed 's/up/已运行/; s/hour/时/; s/minutes/分/; s/days/天/; s/months/月/')
+server_ip=$(hostname -I)
+uptime_cn=$(uptime -p | sed '
+    s/up/已运行/;
+    s/weeks\?/周/;
+    s/days\?/天/;
+    s/hours\?/时/;
+    s/minutes\?/分/;
+    s/,//g;')
+
+# 获取系统信息
+source /etc/os-release
+os_info=$PRETTY_NAME
+current_time=$(date "+%Y-%m-%d %H:%M:%S %Z")
 
 # 主菜单
-show_main_menu() {
+show_main_menu() { 
     clear
-    echo -e "${GREEN}===================================${NC}"
-    echo -e "${BLUE}        Linux 工具箱 v1.0内测${NC}"
-    echo -e "${GREEN}===================================${NC}"
+    echo -e "${GREEN}=============================================${NC}"
+    echo -e "${BLUE}          Linux 工具箱 v1.0 内测版           ${NC}"
+    echo -e "${GREEN}=============================================${NC}"
     echo -e "开发支持：搜码(souma.net) 速拓云(sutuoc.com)"
-    echo -e "${GREEN}-----------------------------------${NC}"
-    echo -e "${YELLOW}服务器IP: ${GREEN}$server_ip${NC}"
-    echo -e "${YELLOW}运行时间: ${GREEN}$uptime_cn${NC}"
-    echo -e "${GREEN}-----------------------------------${NC}"
+    echo -e "${GREEN}---------------------------------------------${NC}"
+    echo -e "${YELLOW}▶ 服务器IP   : ${GREEN}$server_ip${NC}"
+    echo -e "${YELLOW}▶ 运行时间   : ${GREEN}$uptime_cn${NC}"
+    echo -e "${YELLOW}▶ 系统时间   : ${GREEN}$current_time${NC}"
+    echo -e "${YELLOW}▶ 运行环境   : ${GREEN}$os_info${NC}"
+    echo -e "${YELLOW}▶ 系统架构   : ${GREEN}$(uname -m) [$(getconf LONG_BIT)位]${NC}"
+    echo -e "${GREEN}---------------------------------------------${NC}"
     echo -e "1. 系统管理菜单"
     echo -e "2. 磁盘管理菜单"
     echo -e "3. 软件管理菜单"
     echo -e "4. 退出工具箱"
-    echo -e "${GREEN}===================================${NC}"
+    echo -e "${GREEN}=============================================${NC}"
 }
 
 # 系统管理菜单
@@ -203,15 +217,45 @@ handle_system_menu() {
                 fi
                 ;;
             3)
-                read -p "输入新SSH端口 (1024-65535): " port
-                if [[ $port =~ ^[0-9]+$ ]] && [ $port -ge 1024 ] && [ $port -le 65535 ]; then
-                    sed -i "s/^#Port.*/Port $port/" /etc/ssh/sshd_config
-                    systemctl restart sshd
-                    echo -e "${GREEN}SSH端口已修改为 $port${NC}"
+                read -p "输入新SSH端口 (22-65535): " port
+
+              # 验证端口格式
+               [[ ! $port =~ ^[0-9]+$ || $port -lt 22 || $port -gt 65535 ]] && 
+                echo -e "${RED}无效端口号！${NC}" && exit 1
+
+              # 备份配置文件
+                sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+
+              # 清理旧端口配置并添加新端口
+                sudo sed -i '/^Port/d;/^#Port/d' /etc/ssh/sshd_config
+                echo "Port $port" | sudo tee -a /etc/ssh/sshd_config
+
+              # 重启服务
+                sudo systemctl restart sshd
+                [ $? -ne 0 ] && echo -e "${RED}SSH服务重启失败，请检查配置！${NC}" && exit 2
+
+              # 防火墙配置
+                if command -v firewall-cmd &> /dev/null; then
+                   sudo firewall-cmd --permanent --add-port=$port/tcp
+                   sudo firewall-cmd --reload
+                elif command -v ufw &> /dev/null; then
+                   sudo ufw allow $port/tcp
+                   sudo ufw reload
                 else
-                    echo -e "${RED}无效端口号！${NC}"
+                   echo -e "${YELLOW}未检测到防火墙，请手动配置iptables${NC}"
                 fi
-                ;;
+
+              # SELinux配置
+                if sestatus | grep -q "enabled"; then
+                   sudo semanage port -a -t ssh_port_t -p tcp $port || {
+                      echo -e "${RED}SELinux规则添加失败，尝试手动执行："
+                      echo -e "sudo semanage port -a -t ssh_port_t -p tcp $port${NC}"
+                       }
+                fi
+
+                    echo -e "${GREEN}配置完成！请通过以下命令验证："
+                    echo -e "ssh -p $port $(whoami)@$(curl -s ifconfig.me)${NC}"
+                  ;;
             4)
                 timedatectl set-timezone Asia/Shanghai
                 systemctl restart systemd-timesyncd
