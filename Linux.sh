@@ -16,7 +16,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # 恢复默认颜色
 
 # 全局变量
-server_ip=$(hostname -I)
+server_ip=$(curl ifconfig.me)
 uptime_cn=$(uptime -p | sed '
     s/up/已运行/;
     s/weeks\?/周/;
@@ -30,11 +30,147 @@ source /etc/os-release
 os_info=$PRETTY_NAME
 current_time=$(date "+%Y-%m-%d %H:%M:%S %Z")
 
+# 万能wget安装脚本
+install_wget_universal() {
+    # 系统检测
+    detect_os() {
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            OS_ID="$ID"
+            OS_VERSION_ID="$VERSION_ID"
+        elif type lsb_release >/dev/null 2>&1; then
+            OS_ID=$(lsb_release -si | tr '[:upper:]' '[:lower:]')
+            OS_VERSION_ID=$(lsb_release -sr)
+        else
+            echo -e "${RED}[!] 无法检测Linux发行版${NC}"
+            exit 1
+        fi
+
+        case "$OS_ID" in
+            debian|ubuntu|linuxmint)
+                PKG_MGR="apt-get"
+                ;;
+            centos|rhel|ol)
+                PKG_MGR="yum"
+                ;;
+            fedora)
+                PKG_MGR="dnf"
+                ;;
+            arch|manjaro)
+                PKG_MGR="pacman"
+                ;;
+            opensuse*|sled|sles)
+                PKG_MGR="zypper"
+                ;;
+            *)
+                echo -e "${RED}[!] 不支持的发行版: $OS_ID${NC}"
+                exit 1
+                ;;
+        esac
+    }
+
+    # 安装依赖
+    install_deps() {
+        if command -v wget &> /dev/null; then
+            echo -e "${GREEN}[✓] wget 已安装${NC}"
+            return 0
+        fi
+
+        echo -e "${BLUE}[*] 正在安装wget...${NC}"
+
+        case "$PKG_MGR" in
+            apt-get)
+                sudo apt-get update || {
+                    echo -e "${RED}[!] 更新软件源失败${NC}"
+                    return 1
+                }
+                sudo apt-get install -y wget
+                ;;
+            yum)
+                sudo yum install -y wget
+                ;;
+            dnf)
+                sudo dnf install -y wget
+                ;;
+            pacman)
+                sudo pacman -Sy --noconfirm wget
+                ;;
+            zypper)
+                sudo zypper refresh || {
+                    echo -e "${YELLOW}[!] 仓库刷新失败，尝试继续安装...${NC}"
+                }
+                sudo zypper install -y wget
+                ;;
+        esac
+
+        # 验证安装
+        if ! command -v wget &> /dev/null; then
+            echo -e "${RED}[!] wget 安装失败${NC}"
+            return 1
+        fi
+
+        echo -e "${GREEN}[✓] wget 安装成功${NC}"
+        return 0
+    }
+
+    # 异常处理
+    trap 'echo -e "${RED}[!] 用户中断操作${NC}"; exit 130' INT
+    trap 'echo -e "${RED}[!] 发生严重错误${NC}"; exit 1' TERM
+
+    # 主程序
+    main() {
+        # 检测系统
+        detect_os
+        echo -e "${BLUE}[*] 检测到系统: ${GREEN}$OS_ID${BLUE} 版本: ${GREEN}$OS_VERSION_ID${NC}"
+
+        # 安装wget
+        if ! install_deps; then
+            # 备用安装方法
+            echo -e "${YELLOW}[!] 尝试源码编译安装...${NC}"
+            
+            temp_dir=$(mktemp -d)
+            cd "$temp_dir" || exit 1
+            
+            echo -e "${BLUE}[*] 下载wget源码...${NC}"
+            curl -sLO https://ftp.gnu.org/gnu/wget/wget-latest.tar.gz || {
+                echo -e "${RED}[!] 源码下载失败${NC}"
+                exit 1
+            }
+
+            tar xzf wget-latest.tar.gz
+            cd wget-* || exit 1
+
+            echo -e "${BLUE}[*] 编译安装...${NC}"
+            ./configure --prefix=/usr/local \
+                --sysconfdir=/etc \
+                --with-ssl=openssl >> /tmp/wget_install.log 2>&1
+
+            make -j$(nproc) >> /tmp/wget_install.log 2>&1
+            sudo make install >> /tmp/wget_install.log 2>&1
+
+            # 验证安装
+            if /usr/local/bin/wget --version &> /dev/null; then
+                echo -e "${GREEN}[✓] 源码编译安装成功${NC}"
+            else
+                echo -e "${RED}[!] 源码安装失败，查看日志: /tmp/wget_install.log${NC}"
+                exit 1
+            fi
+        fi
+
+        # 版本验证
+        echo -e "${BLUE}[*] 安装版本信息:${NC}"
+        wget --version | head -n1
+    }
+
+    # 执行主程序
+    main
+}
+
 # 主菜单
 show_main_menu() { 
     clear
     echo -e "${GREEN}=============================================${NC}"
-    echo -e "${BLUE}          Linux 工具箱 v1.0 内测版           ${NC}"
+    echo -e "${BLUE}             Linux 工具箱 v1.0.1             ${NC}"
     echo -e "${GREEN}=============================================${NC}"
     echo -e "开发支持：搜码(souma.net) 速拓云(sutuoc.com)"
     echo -e "${GREEN}---------------------------------------------${NC}"
@@ -85,8 +221,9 @@ show_software_menu() {
     echo -e "${BLUE}         软件管理菜单${NC}"
     echo -e "${GREEN}===================================${NC}"
     echo -e "1. 更新YUM源"
-    echo -e "2. 安装宝塔面板"
-    echo -e "3. 返回主菜单"
+    echo -e "2. 安装wget"
+    echo -e "3. 安装宝塔面板"
+    echo -e "4. 返回主菜单"
     echo -e "${GREEN}===================================${NC}"
 }
 
@@ -130,6 +267,7 @@ mount_data_disk() {
     echo -e "挂载点: ${BLUE}$mount_point${NC}"
     df -h | grep "$mount_point"
 }
+
 # 卸载数据盘
 unmount_data_disk() {
     # 使用lsblk检测已挂载的非系统磁盘
@@ -268,6 +406,31 @@ handle_system_menu() {
     done
 }
 
+# 软件管理功能
+handle_software_menu() {
+    while true; do
+        show_software_menu
+        read -p "请选择操作 [1-4]: " soft_choice
+        case $soft_choice in
+            1) 
+                echo -e "${YELLOW}正在优化YUM源...${NC}"
+                bash <(curl -sSL https://linuxmirrors.cn/main.sh)
+                ;;
+            2) 
+                install_wget_universal
+                ;;
+            3)
+                echo -e "${YELLOW}正在安装宝塔面板...${NC}"
+                curl -sSO https://download.bt.cn/install/install_panel.sh
+                bash install_panel.sh 19e49bd8
+                ;;
+            4) break ;;
+            *) echo -e "${RED}无效选择！${NC}" ;;
+        esac
+        read -p "按回车继续..."
+    done
+}
+
 # 主程序循环
 while true; do
     show_main_menu
@@ -294,26 +457,7 @@ while true; do
                 read -p "按回车继续..."
             done
             ;;
-        3)
-            while true; do
-                show_software_menu
-                read -p "请选择操作 [1-3]: " soft_choice
-                case $soft_choice in
-                    1) 
-                        echo -e "${YELLOW}正在优化YUM源...${NC}"
-                        bash <(curl -sSL https://linuxmirrors.cn/main.sh)
-                        ;;
-                    2)
-                        echo -e "${YELLOW}正在安装宝塔面板...${NC}"
-                        curl -sSO https://download.bt.cn/install/install_panel.sh
-                        bash install_panel.sh 19e49bd8
-                        ;;
-                    3) break ;;
-                    *) echo -e "${RED}无效选择！${NC}" ;;
-                esac
-                read -p "按回车继续..."
-            done
-            ;;
+        3) handle_software_menu ;;
         4)
             echo -e "${GREEN}感谢使用，再见！${NC}"
             exit 0
