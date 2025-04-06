@@ -63,8 +63,6 @@ graph TD
 本项目采用 [GPL-3.0协议](https://www.gnu.org/licenses/gpl-3.0.html) 开源，欢迎二次开发但需保留原始声明。
 
 ## 🌐 相关链接
-• [官方文档](https://souma.net/docs)
-• [问题反馈](https://souma.net/issues)
 • [速拓云计算平台](https://sutuoc.com)
 
-> 提示：本工具持续迭代更新，建议定期执行 `./update.sh` 获取最新功能
+> 提示：本工具持续迭代更新，建议定期获取最新功能
